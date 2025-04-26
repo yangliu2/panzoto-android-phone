@@ -16,6 +16,14 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    
+    buildFeatures{
+        compose = true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.14"
+    }
 
     buildTypes {
         release {
@@ -48,7 +56,8 @@ dependencies {
     implementation(libs.aws.android.sdk.s3)
     implementation(libs.aws.android.sdk.core)
     implementation(libs.aws.android.sdk.cognitoidentityprovider)
-    implementation(libs.androidx.appcompat.v131)
-    implementation(libs.androidx.core.ktx.v160)
-
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.activity.compose)
+    
 }

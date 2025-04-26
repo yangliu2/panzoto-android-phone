@@ -1,57 +1,123 @@
 package com.example.panzoto
-
+import android.util.Log
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.MediaRecorder
 import android.os.Bundle
-import android.widget.Button
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-import com.example.panzoto.audio.AudioRecorder
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var audioRecorder: AudioRecorder
-    private lateinit var startButton: Button
-    private lateinit var stopButton: Button
+class MainActivity : ComponentActivity() {
+    private var mediaRecorder: MediaRecorder? = null
+    private var outputFilePath: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
 
-        // Initialize AudioRecorder
-        audioRecorder = AudioRecorder(this)
+        requestPermissions()
 
-        // Get references to the buttons
-        startButton = findViewById(R.id.startRecordingButton)
-        stopButton = findViewById(R.id.stopRecordingButton)
-
-        // Set up the start button click listener
-        startButton.setOnClickListener {
-            startRecording()
+        setContent {
+            AudioRecorderScreen(
+                onStartRecording = { startRecording() },
+                onStopRecording = { stopRecording() }
+            )
         }
+    }
 
-        // Set up the stop button click listener
-        stopButton.setOnClickListener {
-            stopRecording()
-        }
+    private fun requestPermissions() {
+        val permissions = arrayOf(
+            Manifest.permission.RECORD_AUDIO
+        )
+        ActivityCompat.requestPermissions(this, permissions, 0)
+    }
 
-        // Request permissions for recording if necessary
-        audioRecorder.requestRecordingPermission(this)
+    private fun hasPermissions(): Boolean {
+        val recordAudioPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+        return recordAudioPermission == PackageManager.PERMISSION_GRANTED
     }
 
     private fun startRecording() {
-        // Disable the start button and enable the stop button
-        startButton.isEnabled = false
-        stopButton.isEnabled = true
+        if (!hasPermissions()) {
+            Toast.makeText(this, "Permissions not granted!", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-        // Start the audio recording
-        audioRecorder.startRecording()
+        val fileName = "audio_record_${System.currentTimeMillis()}.3gp"
+        outputFilePath = "${externalCacheDir?.absolutePath}/$fileName"
+
+        mediaRecorder = MediaRecorder().apply {
+            setAudioSource(MediaRecorder.AudioSource.MIC)
+            setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+            setOutputFile(outputFilePath)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+            prepare()
+            start()
+        }
+        Toast.makeText(this, "Recording started...", Toast.LENGTH_SHORT).show()
     }
 
     private fun stopRecording() {
-        // Disable the stop button and enable the start button
-        startButton.isEnabled = true
-        stopButton.isEnabled = false
+        mediaRecorder?.apply {
+            stop()
+            release()
+        }
+        mediaRecorder = null
+        Toast.makeText(this, "Recording saved: $outputFilePath", Toast.LENGTH_LONG).show()
 
-        // Stop the audio recording
-        audioRecorder.stopRecording()
+        Log.d("AudioPath", "Saved audio file: $outputFilePath")
+    }
+}
+
+
+@Composable
+fun AudioRecorderScreen(
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit
+) {
+    val context = LocalContext.current
+    var isRecording by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Button(
+            onClick = {
+                if (!isRecording) {
+                    onStartRecording()
+                    isRecording = true
+                }
+            },
+            enabled = !isRecording,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Start Recording")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = {
+                if (isRecording) {
+                    onStopRecording()
+                    isRecording = false
+                }
+            },
+            enabled = isRecording,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Stop Recording")
+        }
     }
 }

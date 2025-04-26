@@ -1,7 +1,9 @@
 [versions]
+activityCompose = "1.10.1"
 agp = "8.8.1"
 appcompatVersion = "1.3.1"
 awsAndroidSdkS3 = "2.16.10"
+composeBom = "2025.04.01"
 coreKtxVersion = "1.6.0"
 kotlin = "1.9.24"
 coreKtx = "1.10.1"
@@ -14,9 +16,12 @@ activity = "1.8.0"
 constraintlayout = "2.1.4"
 
 [libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
 androidx-appcompat-v131 = { module = "androidx.appcompat:appcompat", version.ref = "appcompatVersion" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-core-ktx-v160 = { module = "androidx.core:core-ktx", version.ref = "coreKtxVersion" }
+androidx-material3 = { module = "androidx.compose.material3:material3" }
 aws-android-sdk-cognitoidentityprovider = { module = "com.amazonaws:aws-android-sdk-cognitoidentityprovider", version.ref = "awsAndroidSdkS3" }
 aws-android-sdk-core = { module = "com.amazonaws:aws-android-sdk-core", version.ref = "awsAndroidSdkS3" }
 aws-android-sdk-s3 = { module = "com.amazonaws:aws-android-sdk-s3", version.ref = "awsAndroidSdkS3" }
