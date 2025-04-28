@@ -15,6 +15,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import java.io.File
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private var mediaRecorder: MediaRecorder? = null
@@ -71,10 +77,88 @@ class MainActivity : ComponentActivity() {
             release()
         }
         mediaRecorder = null
-        Toast.makeText(this, "Recording saved: $outputFilePath", Toast.LENGTH_LONG).show()
+
+        Toast.makeText(this, "Recording saved: $outputFilePath", Toast.LENGTH_SHORT).show()
 
         Log.d("AudioPath", "Saved audio file: $outputFilePath")
+
+        // Encrypt the file immediately after recording
+        val inputFile = File(outputFilePath)
+        val encryptedFile = File("${outputFilePath}_encrypted")
+
+        FileEncryptor.encryptFile(inputFile, encryptedFile)
+
+        Toast.makeText(this, "Encrypted file saved: ${encryptedFile.absolutePath}", Toast.LENGTH_LONG).show()
+
+        Log.d("EncryptedPath", "Saved encrypted file: ${encryptedFile.absolutePath}")
+
+        requestPresignedUrlAndUpload(encryptedFile)
     }
+
+    private fun requestPresignedUrlAndUpload(encryptedFile: File) {
+        val apiUrl = "https://o3xjl9jmwf.execute-api.us-east-1.amazonaws.com/generate-url?key=audio_upload/${encryptedFile.name}"
+
+        val client = OkHttpClient()
+
+        // Step 1: Request Pre-Signed URL
+        val request = Request.Builder()
+            .url(apiUrl)
+            .get()
+            .build()
+
+        Thread {
+            try {
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val bodyString = response.body?.string()
+                    val jsonResponse = JSONObject(bodyString ?: "{}")
+                    val presignedUrl = jsonResponse.getString("url")
+
+                    Log.d("PresignedURL", "Got presigned URL: $presignedUrl")
+
+                    // Step 2: Upload Encrypted File
+                    uploadEncryptedFile(encryptedFile, presignedUrl)
+                } else {
+                    Log.e("PresignedURL", "Failed to get URL: ${response.code}")
+                }
+            } catch (e: Exception) {
+                Log.e("PresignedURL", "Exception during request", e)
+            }
+        }.start()
+    }
+
+    private fun uploadEncryptedFile(encryptedFile: File, presignedUrl: String) {
+        val client = OkHttpClient()
+
+        val fileBytes = encryptedFile.readBytes()
+        val requestBody = RequestBody.create(null, fileBytes) // <= Notice: NULL media type
+
+        val request = Request.Builder()
+            .url(presignedUrl)
+            .put(requestBody) // DO NOT manually add Content-Type
+            .build()
+
+        val call = client.newCall(request)
+
+        Thread {
+            try {
+                val response = call.execute()
+                val responseBody = response.body?.string()
+
+                if (response.isSuccessful) {
+                    Log.d("UploadStatus", "Upload successful!")
+                } else {
+                    Log.e("UploadStatus", "Upload failed: ${response.code}, error: $responseBody")
+                }
+            } catch (e: Exception) {
+                Log.e("UploadStatus", "Exception during upload", e)
+            }
+        }.start()
+    }
+
+
+
+
 }
 
 
