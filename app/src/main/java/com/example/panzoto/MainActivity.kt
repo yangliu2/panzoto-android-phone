@@ -1,4 +1,5 @@
 package com.example.panzoto
+
 import android.util.Log
 import android.Manifest
 import android.content.pm.PackageManager
@@ -19,8 +20,25 @@ import java.io.File
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import org.json.JSONObject
+import java.util.Timer
+import java.util.TimerTask
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+
+private var mediaRecorder: MediaRecorder? = null
+private var outputFilePath: String = ""
+private var hasVoiceDetected = false
+
+private var startTimeMillis: Long = 0
+private var silenceStartMillis: Long? = null
+private var monitorTimer: Timer? = null
+
+private val silenceThreshold = 500 // Adjust based on microphone sensitivity
+private val silenceDurationMillis = 3000L // 3 seconds
+private val maxChunkDurationMillis = 60000L // 60 seconds
+
 
 class MainActivity : ComponentActivity() {
     private var mediaRecorder: MediaRecorder? = null
@@ -47,16 +65,57 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasPermissions(): Boolean {
-        val recordAudioPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+        val recordAudioPermission =
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
         return recordAudioPermission == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun startRecording() {
-        if (!hasPermissions()) {
-            Toast.makeText(this, "Permissions not granted!", Toast.LENGTH_SHORT).show()
-            return
-        }
+    private fun forceSplit() {
+        stopRecording(autoRestart = true)
+    }
 
+
+    private var monitoringHandler: Handler? = null
+    private var hasVoiceDetected = false
+
+    private val monitoringRunnable = object : Runnable {
+        override fun run() {
+            val currentTime = System.currentTimeMillis()
+            val elapsedTime = currentTime - startTimeMillis
+            val amplitude = mediaRecorder?.maxAmplitude ?: 0
+
+            if (amplitude < silenceThreshold) {
+                if (silenceStartMillis == null) {
+                    silenceStartMillis = currentTime
+                } else if (currentTime - silenceStartMillis!! >= silenceDurationMillis) {
+                    Log.d("Split", "Silence detected, splitting recording.")
+                    forceSplit()
+                    return
+                }
+            } else {
+                hasVoiceDetected = true // ✅ Real sound detected
+                silenceStartMillis = null
+            }
+
+            if (elapsedTime >= maxChunkDurationMillis) {
+                Log.d("Split", "Max duration reached, splitting recording.")
+                forceSplit()
+                return
+            }
+
+            monitoringHandler?.postDelayed(this, 200)
+        }
+    }
+
+    private fun startMonitoring() {
+        hasVoiceDetected = false
+        silenceStartMillis = null
+        monitoringHandler = Handler(Looper.getMainLooper())
+        monitoringHandler?.post(monitoringRunnable)
+    }
+
+
+    private fun startRecording() {
         val fileName = "audio_record_${System.currentTimeMillis()}.3gp"
         outputFilePath = "${externalCacheDir?.absolutePath}/$fileName"
 
@@ -68,43 +127,88 @@ class MainActivity : ComponentActivity() {
             prepare()
             start()
         }
+
+        startTimeMillis = System.currentTimeMillis()
+        silenceStartMillis = null
+
+        startMonitoring()
         Toast.makeText(this, "Recording started...", Toast.LENGTH_SHORT).show()
     }
 
-    private fun stopRecording() {
-        mediaRecorder?.apply {
-            stop()
-            release()
+    private fun stopRecording(autoRestart: Boolean = false) {
+        monitoringHandler?.removeCallbacks(monitoringRunnable)
+        monitoringHandler = null
+
+        val duration = System.currentTimeMillis() - startTimeMillis
+        if (duration < 1000L) {
+            Log.w("Split", "Recording too short (<1s). Skipping stop.")
+            if (autoRestart) startRecording()
+            return
         }
+
+        try {
+            mediaRecorder?.apply {
+                stop()
+                release()
+            }
+        } catch (e: Exception) {
+            Log.e("Recorder", "Stop failed: ${e.message}")
+            if (autoRestart) startRecording()
+            return
+        }
+
         mediaRecorder = null
 
-        Toast.makeText(this, "Recording saved: $outputFilePath", Toast.LENGTH_SHORT).show()
-
-        Log.d("AudioPath", "Saved audio file: $outputFilePath")
-
-        // Encrypt the file immediately after recording
         val inputFile = File(outputFilePath)
-        val encryptedFile = File("${outputFilePath}_encrypted")
+        if (!inputFile.exists() || inputFile.length() < 2000) {
+            Log.d("UploadSkipped", "Skipped small file: ${inputFile.name}")
+            inputFile.delete()
+            if (autoRestart) startRecording()
+            return
+        }
 
+        if (!hasVoiceDetected) {
+            Log.d(
+                "UploadSkipped",
+                "Skipped silent recording (no voice detected): ${inputFile.name}"
+            )
+            inputFile.delete()
+            if (autoRestart) startRecording()
+            return
+        }
+
+        val encryptedFile = File("${outputFilePath}_encrypted")
         FileEncryptor.encryptFile(inputFile, encryptedFile)
 
-        Toast.makeText(this, "Encrypted file saved: ${encryptedFile.absolutePath}", Toast.LENGTH_LONG).show()
+        if (!encryptedFile.exists() || encryptedFile.length() < 1000) {
+            Log.d("UploadSkipped", "Encrypted file too small or missing: ${encryptedFile.name}")
+            encryptedFile.delete()
+            if (autoRestart) startRecording()
+            return
+        }
 
-        Log.d("EncryptedPath", "Saved encrypted file: ${encryptedFile.absolutePath}")
+        Handler(Looper.getMainLooper()).postDelayed({
+            val presignedKey = "audio_upload/${Uri.encode(encryptedFile.name)}"
+            requestPresignedUrlAndUpload(encryptedFile, presignedKey)
+        }, 200)
 
-        requestPresignedUrlAndUpload(encryptedFile)
+        if (autoRestart) {
+            startRecording()
+        }
     }
 
-    private fun requestPresignedUrlAndUpload(encryptedFile: File) {
-        val apiUrl = "https://o3xjl9jmwf.execute-api.us-east-1.amazonaws.com/generate-url?key=audio_upload/${encryptedFile.name}"
+
+    private fun requestPresignedUrlAndUpload(encryptedFile: File, key: String) {
+        if (!encryptedFile.exists() || encryptedFile.length() < 1000) {
+            Log.e("PresignedURL", "Encrypted file invalid: ${encryptedFile.absolutePath}")
+            return
+        }
+
+        val apiUrl = "https://o3xjl9jmwf.execute-api.us-east-1.amazonaws.com/generate-url?key=$key"
+        Log.d("PresignedURL", "Requesting presigned URL from: $apiUrl")
 
         val client = OkHttpClient()
-
-        // Step 1: Request Pre-Signed URL
-        val request = Request.Builder()
-            .url(apiUrl)
-            .get()
-            .build()
+        val request = Request.Builder().url(apiUrl).get().build()
 
         Thread {
             try {
@@ -113,19 +217,18 @@ class MainActivity : ComponentActivity() {
                     val bodyString = response.body?.string()
                     val jsonResponse = JSONObject(bodyString ?: "{}")
                     val presignedUrl = jsonResponse.getString("url")
-
                     Log.d("PresignedURL", "Got presigned URL: $presignedUrl")
 
-                    // Step 2: Upload Encrypted File
                     uploadEncryptedFile(encryptedFile, presignedUrl)
                 } else {
-                    Log.e("PresignedURL", "Failed to get URL: ${response.code}")
+                    Log.e("PresignedURL", "Failed to get URL: ${response.code} ${response.message}")
                 }
             } catch (e: Exception) {
-                Log.e("PresignedURL", "Exception during request", e)
+                Log.e("PresignedURL", "Exception during request: ${e.message}", e)
             }
         }.start()
     }
+
 
     private fun uploadEncryptedFile(encryptedFile: File, presignedUrl: String) {
         val client = OkHttpClient()
@@ -155,8 +258,6 @@ class MainActivity : ComponentActivity() {
             }
         }.start()
     }
-
-
 
 
 }
